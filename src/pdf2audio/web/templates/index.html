@@ -262,8 +262,19 @@
             <div class="device-badge">{{ device }} detected</div>
         </header>
 
+        {% if not setup_done %}
+        <div class="card" style="border-color: var(--red);">
+            <h2 style="color: var(--red);">Setup Required</h2>
+            <p>Model files have not been downloaded yet. Run the setup command first:</p>
+            <pre style="background: var(--surface2); padding: 0.75rem; border-radius: 6px; margin-top: 0.75rem; color: var(--green); font-size: 0.9rem;">pdf2audio setup</pre>
+            <p style="color: var(--text-dim); font-size: 0.85rem; margin-top: 0.5rem;">
+                This downloads ~350 MB of model files once. After that, everything runs fully offline.
+            </p>
+        </div>
+        {% endif %}
+
         <!-- Step 1: Upload -->
-        <div class="card" id="upload-card">
+        <div class="card{% if not setup_done %} hidden{% endif %}" id="upload-card">
             <h2><span class="step-num">1</span> Upload PDF</h2>
             <div class="upload-zone" id="upload-zone">
                 <div class="icon">&#x1F4C4;</div>
@@ -282,14 +293,9 @@
                 <div>
                     <label for="voice-select">Voice</label>
                     <select id="voice-select">
-                        <option value="af_heart">af_heart (American F, A)</option>
-                        <option value="af_bella">af_bella (American F, A-)</option>
-                        <option value="af_sarah">af_sarah (American F, B)</option>
-                        <option value="am_adam">am_adam (American M, B)</option>
-                        <option value="am_michael">am_michael (American M, B)</option>
-                        <option value="bf_emma">bf_emma (British F, B-)</option>
-                        <option value="bm_george">bm_george (British M, C+)</option>
-                        <option value="ff_siwis">ff_siwis (French F, B-)</option>
+                        {% for v in local_voices %}
+                        <option value="{{ v }}"{% if v == default_voice %} selected{% endif %}>{{ v }}</option>
+                        {% endfor %}
                     </select>
                 </div>
                 <div>

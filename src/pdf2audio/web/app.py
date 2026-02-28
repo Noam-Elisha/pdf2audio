@@ -14,6 +14,7 @@ from flask import Flask, render_template, request, jsonify, send_from_directory
 
 from ..pdf_extract import extract_chapters, get_pdf_info
 from ..tts_engine import TTSEngine, DEFAULT_VOICE, detect_device
+from ..model_manager import is_setup_complete, list_local_voices
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,15 @@ OUTPUT_DIR = Path("output")
 @app.route("/")
 def index():
     device = detect_device()
-    return render_template("index.html", device=device, default_voice=DEFAULT_VOICE)
+    setup_done = is_setup_complete()
+    local_voices = list_local_voices() if setup_done else []
+    return render_template(
+        "index.html",
+        device=device,
+        default_voice=DEFAULT_VOICE,
+        setup_done=setup_done,
+        local_voices=local_voices,
+    )
 
 
 @app.route("/api/upload", methods=["POST"])
@@ -177,8 +186,12 @@ def serve_audio(job_id, filename):
 
 @app.route("/api/device")
 def device_info():
-    """Return detected compute device."""
-    return jsonify({"device": detect_device()})
+    """Return detected compute device and setup status."""
+    return jsonify({
+        "device": detect_device(),
+        "setup_complete": is_setup_complete(),
+        "local_voices": list_local_voices(),
+    })
 
 
 def create_app(host="127.0.0.1", port=5000, debug=False):

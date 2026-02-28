@@ -14,6 +14,7 @@ import soundfile as sf
 import torch
 
 from .pdf_extract import Chapter
+from .model_manager import get_model_dir, get_local_paths, get_voice_path, is_setup_complete
 
 logger = logging.getLogger(__name__)
 
@@ -73,12 +74,32 @@ class TTSEngine:
         self._pipeline = None
 
     def _ensure_pipeline(self):
-        """Lazy-init the Kokoro pipeline."""
+        """Lazy-init the Kokoro pipeline using local model files."""
         if self._pipeline is None:
-            from kokoro import KPipeline
-            logger.info(f"Initializing Kokoro pipeline (lang={self.lang_code}, device={self.device})")
-            self._pipeline = KPipeline(lang_code=self.lang_code, device=self.device)
-            logger.info("Kokoro pipeline ready")
+            if not is_setup_complete():
+                raise RuntimeError(
+                    "Models not downloaded yet. Run 'pdf2audio setup' first to download "
+                    "model files for offline use."
+                )
+
+            from kokoro import KPipeline, KModel
+
+            paths = get_local_paths()
+            logger.info(f"Loading model from local files: {paths['config']}")
+
+            # Load model from local files — no HuggingFace downloads
+            model = KModel(config=paths["config"], model=paths["model"])
+            model = model.to(self.device).eval()
+
+            self._pipeline = KPipeline(
+                lang_code=self.lang_code,
+                model=model,
+                device=self.device,
+            )
+
+            # Resolve voice name to local .pt path so pipeline doesn't hit HF
+            self._voice_path = get_voice_path(self.voice)
+            logger.info(f"Kokoro pipeline ready (local, device={self.device})")
 
     def generate_chapter(
         self,
@@ -108,7 +129,7 @@ class TTSEngine:
 
         for _gs, _ps, audio in self._pipeline(
             chapter.text,
-            voice=self.voice,
+            voice=self._voice_path,
             speed=self.speed,
             split_pattern=r'\n+',
         ):

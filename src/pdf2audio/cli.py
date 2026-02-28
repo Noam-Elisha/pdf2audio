@@ -14,6 +14,7 @@ from rich.panel import Panel
 
 from .pdf_extract import extract_chapters, get_pdf_info
 from .tts_engine import TTSEngine, DEFAULT_VOICE, detect_device
+from .model_manager import is_setup_complete, get_model_dir, list_local_voices
 
 console = Console()
 
@@ -27,6 +28,55 @@ def main():
     outputting files as they complete so you can start listening immediately.
     """
     pass
+
+
+@main.command()
+@click.option("--model-dir", default=None, help="Custom directory to store model files")
+def setup(model_dir):
+    """Download model files for local offline use (one-time setup).
+
+    Downloads the Kokoro TTS model weights, config, and voice files
+    to ~/.pdf2audio/models/ (or a custom directory). After this,
+    everything runs fully locally with no internet required.
+    """
+    from .model_manager import download_models
+    from pathlib import Path
+
+    target_dir = Path(model_dir) if model_dir else get_model_dir()
+
+    if is_setup_complete(target_dir):
+        console.print(f"[green]Models already downloaded at {target_dir}[/green]")
+        voices = list_local_voices(target_dir)
+        console.print(f"  {len(voices)} voices available: {', '.join(voices[:5])}...")
+        return
+
+    console.print(Panel("[bold]pdf2audio setup[/bold] - Downloading model files", style="blue"))
+    console.print(f"  Target: [cyan]{target_dir}[/cyan]")
+    console.print()
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Downloading...", total=None)
+
+        def on_progress(step, total, msg):
+            progress.update(task, total=total, completed=step, description=msg)
+
+        download_models(model_dir=target_dir, progress_callback=on_progress)
+
+    console.print()
+    voices = list_local_voices(target_dir)
+    console.print(Panel(
+        f"[bold green]Setup complete![/bold green]\n"
+        f"Models saved to {target_dir}\n"
+        f"{len(voices)} voices downloaded",
+        style="green",
+    ))
 
 
 @main.command()
@@ -53,6 +103,12 @@ def convert(pdf_path, output_dir, voice, speed, lang_code, device, output_format
     if output_dir is None:
         basename = os.path.splitext(os.path.basename(pdf_path))[0]
         output_dir = os.path.join("output", basename)
+
+    # Check setup
+    if not is_setup_complete():
+        console.print("[red]Models not downloaded yet.[/red]")
+        console.print("Run [bold]pdf2audio setup[/bold] first to download model files.")
+        sys.exit(1)
 
     console.print(Panel(f"[bold]pdf2audio[/bold] - PDF to Audiobook Converter", style="blue"))
 
