@@ -263,12 +263,20 @@
         </header>
 
         {% if not setup_done %}
-        <div class="card" style="border-color: var(--red);">
-            <h2 style="color: var(--red);">Setup Required</h2>
-            <p>Model files have not been downloaded yet. Run the setup command first:</p>
-            <pre style="background: var(--surface2); padding: 0.75rem; border-radius: 6px; margin-top: 0.75rem; color: var(--green); font-size: 0.9rem;">pdf2audio setup</pre>
-            <p style="color: var(--text-dim); font-size: 0.85rem; margin-top: 0.5rem;">
-                This downloads ~350 MB of model files once. After that, everything runs fully offline.
+        <div class="card" id="setup-card" style="border-color: var(--orange);">
+            <h2>First-Time Setup</h2>
+            <p>Download the TTS model files (~350 MB) to run locally. This only needs to happen once.</p>
+            <button class="btn btn-primary" id="setup-btn" onclick="startSetup()" style="margin-top: 1rem;">
+                Download Model Files
+            </button>
+            <div id="setup-progress" class="hidden" style="margin-top: 1rem;">
+                <p class="status-text" id="setup-text">Starting download...</p>
+                <div class="progress-bar">
+                    <div class="fill" id="setup-fill" style="width: 0%"></div>
+                </div>
+            </div>
+            <p style="color: var(--text-dim); font-size: 0.85rem; margin-top: 0.75rem;">
+                After this, everything runs fully offline on your machine.
             </p>
         </div>
         {% endif %}
@@ -363,6 +371,61 @@
     <script>
         let currentJob = null;
         let pollInterval = null;
+
+        // Setup handling
+        async function startSetup() {
+            const btn = document.getElementById('setup-btn');
+            btn.disabled = true;
+            btn.textContent = 'Downloading...';
+            document.getElementById('setup-progress').classList.remove('hidden');
+
+            try {
+                const resp = await fetch('/api/setup', { method: 'POST' });
+                const data = await resp.json();
+
+                if (data.status === 'already_done') {
+                    onSetupComplete();
+                    return;
+                }
+
+                // Poll for progress
+                const setupPoll = setInterval(async () => {
+                    try {
+                        const sr = await fetch('/api/setup/status');
+                        const sd = await sr.json();
+
+                        const pct = sd.total > 0 ? Math.round((sd.step / sd.total) * 100) : 0;
+                        document.getElementById('setup-fill').style.width = `${pct}%`;
+                        document.getElementById('setup-text').textContent = sd.message || 'Downloading...';
+
+                        if (sd.setup_complete || sd.done) {
+                            clearInterval(setupPoll);
+                            onSetupComplete(sd.local_voices);
+                        } else if (sd.error) {
+                            clearInterval(setupPoll);
+                            document.getElementById('setup-text').textContent = `Error: ${sd.error}`;
+                            btn.disabled = false;
+                            btn.textContent = 'Retry Download';
+                        }
+                    } catch (e) { /* ignore transient errors */ }
+                }, 1500);
+            } catch (err) {
+                document.getElementById('setup-text').textContent = `Failed: ${err.message}`;
+                btn.disabled = false;
+                btn.textContent = 'Retry Download';
+            }
+        }
+
+        function onSetupComplete(voices) {
+            const setupCard = document.getElementById('setup-card');
+            if (setupCard) {
+                setupCard.innerHTML = `
+                    <h2 style="color: var(--green);">Setup Complete</h2>
+                    <p>Model files downloaded. Reloading...</p>
+                `;
+                setTimeout(() => window.location.reload(), 1500);
+            }
+        }
 
         // Upload handling
         const uploadZone = document.getElementById('upload-zone');

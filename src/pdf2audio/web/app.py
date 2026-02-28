@@ -14,15 +14,16 @@ from flask import Flask, render_template, request, jsonify, send_from_directory
 
 from ..pdf_extract import extract_chapters, get_pdf_info
 from ..tts_engine import TTSEngine, DEFAULT_VOICE, detect_device
-from ..model_manager import is_setup_complete, list_local_voices
+from ..model_manager import is_setup_complete, list_local_voices, download_models
 
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200 MB upload limit
 
-# Global state for tracking jobs
+# Global state for tracking jobs and setup
 JOBS: dict[str, dict] = {}
+SETUP_STATUS: dict = {"running": False, "step": 0, "total": 0, "message": "", "error": None, "done": False}
 UPLOAD_DIR = Path("uploads")
 OUTPUT_DIR = Path("output")
 
@@ -182,6 +183,46 @@ def serve_audio(job_id, filename):
     if not audio_dir.exists():
         return jsonify({"error": "Not found"}), 404
     return send_from_directory(str(audio_dir.resolve()), filename)
+
+
+@app.route("/api/setup", methods=["POST"])
+def start_setup():
+    """Start downloading model files in the background."""
+    if is_setup_complete():
+        return jsonify({"status": "already_done"})
+
+    if SETUP_STATUS["running"]:
+        return jsonify({"status": "already_running"})
+
+    SETUP_STATUS.update({"running": True, "step": 0, "total": 0, "message": "Starting...", "error": None, "done": False})
+
+    thread = threading.Thread(target=_run_setup, daemon=True)
+    thread.start()
+
+    return jsonify({"status": "started"})
+
+
+def _run_setup():
+    """Background worker for downloading models."""
+    try:
+        def on_progress(step, total, msg):
+            SETUP_STATUS.update({"step": step, "total": total, "message": msg})
+
+        download_models(progress_callback=on_progress)
+        SETUP_STATUS.update({"running": False, "done": True, "message": "Setup complete!"})
+    except Exception as e:
+        logger.exception("Setup failed")
+        SETUP_STATUS.update({"running": False, "error": str(e), "message": f"Error: {e}"})
+
+
+@app.route("/api/setup/status")
+def setup_status():
+    """Poll setup progress."""
+    return jsonify({
+        **SETUP_STATUS,
+        "setup_complete": is_setup_complete(),
+        "local_voices": list_local_voices() if is_setup_complete() else [],
+    })
 
 
 @app.route("/api/device")
