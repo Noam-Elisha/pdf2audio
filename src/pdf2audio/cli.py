@@ -13,7 +13,7 @@ from rich.table import Table
 from rich.panel import Panel
 
 from .pdf_extract import extract_chapters, get_pdf_info
-from .tts_engine import TTSEngine, DEFAULT_VOICE, detect_device
+from .tts_engine import TTSEngine, DEFAULT_VOICE, detect_device, auto_detect_workers
 from .model_manager import is_setup_complete, get_model_dir, list_local_voices
 from .manifest import JobManifest
 
@@ -89,8 +89,9 @@ def setup(model_dir):
 @click.option("-d", "--device", default=None, help="Compute device: cuda, cpu, mps (default: auto-detect)")
 @click.option("-f", "--format", "output_format", default="wav", type=click.Choice(["wav", "mp3", "flac", "ogg"]), help="Audio format")
 @click.option("-q", "--quality", default="medium", type=click.Choice(["low", "medium", "high"]), help="MP3 quality (default: medium)")
+@click.option("-w", "--workers", default=None, type=int, help="Number of parallel workers (default: auto-detect)")
 @click.option("--verbose", is_flag=True, help="Enable verbose logging")
-def convert(pdf_path, output_dir, voice, speed, lang_code, device, output_format, quality, verbose):
+def convert(pdf_path, output_dir, voice, speed, lang_code, device, output_format, quality, workers, verbose):
     """Convert a PDF to audiobook files, one per chapter.
 
     Audio files are output as they are generated, so you can start
@@ -119,10 +120,12 @@ def convert(pdf_path, output_dir, voice, speed, lang_code, device, output_format
 
     # Show device info
     dev = device or detect_device()
-    console.print(f"  Device: [cyan]{dev}[/cyan]")
-    console.print(f"  Voice:  [cyan]{voice}[/cyan]")
-    console.print(f"  Speed:  [cyan]{speed}x[/cyan]")
-    console.print(f"  Format: [cyan]{output_format}[/cyan]")
+    num_workers = workers or auto_detect_workers(dev)
+    console.print(f"  Device:  [cyan]{dev}[/cyan]")
+    console.print(f"  Workers: [cyan]{num_workers}[/cyan]")
+    console.print(f"  Voice:   [cyan]{voice}[/cyan]")
+    console.print(f"  Speed:   [cyan]{speed}x[/cyan]")
+    console.print(f"  Format:  [cyan]{output_format}[/cyan]")
     if output_format == "mp3":
         console.print(f"  Quality: [cyan]{quality}[/cyan]")
     console.print()
@@ -182,6 +185,7 @@ def convert(pdf_path, output_dir, voice, speed, lang_code, device, output_format
         device=device,
         output_format=output_format,
         quality=quality,
+        max_workers=workers,
     )
 
     console.print(f"Output directory: [cyan]{output_dir}[/cyan]")

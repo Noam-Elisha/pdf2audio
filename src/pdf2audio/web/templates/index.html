@@ -179,6 +179,47 @@
 
         .btn-download:hover { opacity: 0.9; }
 
+        /* Control buttons */
+        .controls {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+
+        .btn-control {
+            flex: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.4rem;
+            padding: 0.55rem 1rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            background: var(--surface2);
+            color: var(--text);
+            transition: background 0.2s, border-color 0.2s;
+        }
+
+        .btn-control:hover { background: var(--border); }
+        .btn-control:disabled { opacity: 0.4; cursor: not-allowed; }
+        .btn-control.pause { border-color: var(--orange); color: var(--orange); }
+        .btn-control.resume { border-color: var(--green); color: var(--green); }
+        .btn-control.stop { border-color: var(--red); color: var(--red); }
+
+        .workers-badge {
+            display: inline-block;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            padding: 0.15rem 0.5rem;
+            border-radius: 0.75rem;
+            font-size: 0.75rem;
+            color: var(--text-dim);
+            margin-left: 0.5rem;
+        }
+
         /* Chapter table */
         .chapter-table {
             width: 100%;
@@ -399,17 +440,22 @@
             </button>
 
             <div class="info">
-                Audio files are generated one chapter at a time. You can start listening to
-                completed chapters while the rest are still processing.
+                Chapters are generated in parallel when possible. You can start listening to
+                completed chapters while the rest are still processing. Use pause/stop controls
+                to manage long jobs.
             </div>
         </div>
 
         <!-- Progress -->
         <div class="card hidden" id="progress-card">
-            <h2>Progress</h2>
+            <h2>Progress <span class="workers-badge hidden" id="workers-badge"></span></h2>
             <p class="status-text" id="progress-text">Initializing...</p>
             <div class="progress-bar">
                 <div class="fill" id="progress-fill" style="width: 0%"></div>
+            </div>
+            <div class="controls" id="job-controls">
+                <button class="btn-control pause" id="btn-pause" onclick="pauseJob()">Pause</button>
+                <button class="btn-control stop" id="btn-stop" onclick="stopJob()">Stop</button>
             </div>
         </div>
 
@@ -425,6 +471,7 @@
 
     <script>
         let currentJob = null;
+        let activeJobId = null;
         let pollInterval = null;
 
         // Format change: show/hide quality selector
@@ -454,7 +501,6 @@
                     return;
                 }
 
-                // Poll for progress
                 const setupPoll = setInterval(async () => {
                     try {
                         const sr = await fetch('/api/setup/status');
@@ -598,8 +644,17 @@
                     return;
                 }
 
-                // Mark first chapter as generating
-                updateChapterStatus(0, 'generating', 'Generating...');
+                activeJobId = data.job_id;
+
+                // Show workers badge
+                if (data.workers > 1) {
+                    const badge = document.getElementById('workers-badge');
+                    badge.textContent = `${data.workers} workers`;
+                    badge.classList.remove('hidden');
+                }
+
+                // Show controls
+                setControlState('running');
 
                 // Start polling
                 pollInterval = setInterval(() => pollStatus(data.job_id), 1500);
@@ -608,7 +663,50 @@
             }
         }
 
-        let lastCompletedCount = 0;
+        // Job control functions
+        async function pauseJob() {
+            if (!activeJobId) return;
+            try {
+                await fetch(`/api/pause/${activeJobId}`, { method: 'POST' });
+                setControlState('paused');
+            } catch (e) { /* ignore */ }
+        }
+
+        async function resumeJob() {
+            if (!activeJobId) return;
+            try {
+                await fetch(`/api/resume/${activeJobId}`, { method: 'POST' });
+                setControlState('running');
+            } catch (e) { /* ignore */ }
+        }
+
+        async function stopJob() {
+            if (!activeJobId) return;
+            try {
+                await fetch(`/api/stop/${activeJobId}`, { method: 'POST' });
+                setControlState('stopped');
+            } catch (e) { /* ignore */ }
+        }
+
+        function setControlState(state) {
+            const controls = document.getElementById('job-controls');
+            if (state === 'running') {
+                controls.innerHTML = `
+                    <button class="btn-control pause" onclick="pauseJob()">Pause</button>
+                    <button class="btn-control stop" onclick="stopJob()">Stop</button>
+                `;
+            } else if (state === 'paused') {
+                controls.innerHTML = `
+                    <button class="btn-control resume" onclick="resumeJob()">Resume</button>
+                    <button class="btn-control stop" onclick="stopJob()">Stop</button>
+                `;
+            } else {
+                controls.innerHTML = '';
+            }
+        }
+
+        // Track which chapter indices are already done (to avoid overwriting)
+        const completedIndices = new Set();
 
         async function pollStatus(jobId) {
             try {
@@ -620,12 +718,22 @@
                 const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 
                 document.getElementById('progress-fill').style.width = `${pct}%`;
-                document.getElementById('progress-text').textContent =
-                    `${done}/${total} chapters complete (${pct}%)`;
+
+                // Update status text based on job state
+                if (data.status === 'paused') {
+                    document.getElementById('progress-text').textContent =
+                        `Paused - ${done}/${total} chapters complete (${pct}%)`;
+                } else if (data.status === 'running') {
+                    document.getElementById('progress-text').textContent =
+                        `${done}/${total} chapters complete (${pct}%)`;
+                }
 
                 // Update completed chapters
                 if (data.results) {
                     data.results.forEach(r => {
+                        if (completedIndices.has(r.chapter_index)) return;
+                        completedIndices.add(r.chapter_index);
+
                         const filename = r.output_path.split(/[/\\]/).pop();
                         const audioUrl = `/api/audio/${jobId}/${filename}`;
                         const statusText = r.skipped
@@ -636,19 +744,17 @@
                     });
                 }
 
-                // Update per-chapter progress for the currently generating chapter
-                if (data.chapter_progress && data.chapter_progress.chapter_index >= 0) {
-                    const cp = data.chapter_progress;
-                    const chIdx = cp.chapter_index;
-                    const chPct = cp.chars_total > 0
-                        ? Math.round((cp.chars_processed / cp.chars_total) * 100) : 0;
+                // Update per-chapter progress for ALL actively generating chapters (parallel)
+                if (data.chapter_progress) {
+                    for (const [chIdx, cp] of Object.entries(data.chapter_progress)) {
+                        if (completedIndices.has(parseInt(chIdx))) continue;
 
-                    // Mark current chapter as generating with progress bar
-                    const row = document.getElementById(`chapter-row-${chIdx}`);
-                    if (row) {
-                        const statusCell = row.cells[4];
-                        const currentDot = statusCell.querySelector('.status-dot');
-                        if (currentDot && !currentDot.classList.contains('done') && !currentDot.classList.contains('skipped')) {
+                        const chPct = cp.chars_total > 0
+                            ? Math.round((cp.chars_processed / cp.chars_total) * 100) : 0;
+
+                        const row = document.getElementById(`chapter-row-${chIdx}`);
+                        if (row) {
+                            const statusCell = row.cells[4];
                             statusCell.innerHTML = `
                                 <div><span class="status-dot generating"></span>Generating... ${chPct}%</div>
                                 <div class="chapter-progress"><div class="fill" style="width: ${chPct}%"></div></div>
@@ -657,24 +763,33 @@
                     }
                 }
 
-                // Mark next chapter as generating
-                if (done < total && done > lastCompletedCount) {
-                    updateChapterStatus(done, 'generating', 'Generating...');
-                }
-                lastCompletedCount = done;
-
+                // Handle terminal states
                 if (data.status === 'completed') {
                     clearInterval(pollInterval);
                     document.getElementById('progress-text').textContent = 'All chapters complete!';
                     document.getElementById('generate-btn').textContent = 'Done!';
+                    setControlState('done');
 
-                    // Show download button
                     const dlCard = document.getElementById('download-card');
                     dlCard.classList.remove('hidden');
                     document.getElementById('download-all-btn').href = `/api/download-all/${jobId}`;
+                } else if (data.status === 'stopped') {
+                    clearInterval(pollInterval);
+                    document.getElementById('progress-text').textContent =
+                        `Stopped - ${done}/${total} chapters completed`;
+                    document.getElementById('generate-btn').textContent = 'Stopped';
+                    setControlState('done');
+
+                    // Show download if any chapters were generated
+                    if (done > 0) {
+                        const dlCard = document.getElementById('download-card');
+                        dlCard.classList.remove('hidden');
+                        document.getElementById('download-all-btn').href = `/api/download-all/${jobId}`;
+                    }
                 } else if (data.status === 'error') {
                     clearInterval(pollInterval);
                     document.getElementById('progress-text').textContent = `Error: ${data.error}`;
+                    setControlState('done');
                 }
             } catch (err) {
                 // Ignore transient polling errors
