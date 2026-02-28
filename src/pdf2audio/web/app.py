@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import threading
 import time
 import uuid
@@ -24,7 +25,16 @@ from ..manifest import JobManifest
 
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__, template_folder="templates", static_folder="static")
+# Resolve template/static paths for both normal and PyInstaller-frozen modes
+if getattr(sys, "frozen", False):
+    _base = Path(sys._MEIPASS)
+    _template_folder = str(_base / "pdf2audio" / "web" / "templates")
+    _static_folder = str(_base / "pdf2audio" / "web" / "static")
+else:
+    _template_folder = "templates"
+    _static_folder = "static"
+
+app = Flask(__name__, template_folder=_template_folder, static_folder=_static_folder)
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024  # 200 MB upload limit
 
 # Global state for tracking jobs and setup

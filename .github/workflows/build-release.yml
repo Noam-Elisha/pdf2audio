@@ -1,0 +1,84 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - variant: cuda
+            torch_index: https://download.pytorch.org/whl/cu124
+            suffix: cuda
+          - variant: cpu
+            torch_index: https://download.pytorch.org/whl/cpu
+            suffix: cpu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PyTorch (${{ matrix.variant }})
+        run: pip install torch --index-url ${{ matrix.torch_index }}
+
+      - name: Install dependencies
+        run: |
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Build exe
+        run: python build_exe.py
+
+      - name: Zip distribution
+        run: |
+          cd dist
+          7z a -tzip ../pdf2audio-${{ matrix.suffix }}-windows.zip pdf2audio/
+        shell: cmd
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdf2audio-${{ matrix.suffix }}-windows
+          path: pdf2audio-${{ matrix.suffix }}-windows.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/pdf2audio-cuda-windows/pdf2audio-cuda-windows.zip
+            artifacts/pdf2audio-cpu-windows/pdf2audio-cpu-windows.zip
+          body: |
+            ## pdf2audio - PDF to Audiobook Converter
+
+            Download the version that matches your hardware:
+
+            - **pdf2audio-cuda-windows.zip** — For NVIDIA GPU users (faster generation)
+            - **pdf2audio-cpu-windows.zip** — For everyone else (smaller download, no GPU needed)
+
+            ### How to use
+            1. Extract the zip file
+            2. Double-click `pdf2audio.exe`
+            3. Your browser will open automatically
+            4. On first run, click "Download Model Files" (one-time ~400 MB download)
+            5. Upload a PDF and generate your audiobook!
+          generate_release_notes: true

@@ -22,3 +22,5 @@ Thumbs.db
 *.log
 .ruff_cache/
 .mypy_cache/
+*.spec.bak
+pdf2audio-*.zip
