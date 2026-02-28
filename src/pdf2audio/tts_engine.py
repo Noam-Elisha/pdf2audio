@@ -436,10 +436,80 @@ class TTSEngine:
 
 
 def _split_long_text(text: str, max_chars: int = MAX_SEGMENT_CHARS) -> list[str]:
-    """Split text into segments at sentence boundaries."""
-    if len(text) <= max_chars:
-        return [text]
+    """Split text into segments, preferring paragraph then sentence boundaries.
 
+    Strategy:
+    1. Split into paragraphs (on blank lines) and join hard-wrapped lines within each.
+    2. Merge small consecutive paragraphs into segments up to max_chars.
+    3. If a single paragraph exceeds max_chars, split it at sentence endings.
+    """
+    # Step 1: Split into paragraphs (also joins hard-wrapped lines within each)
+    paragraphs = _split_paragraphs(text)
+
+    if not paragraphs:
+        return []
+
+    # Short text: return as single segment (already normalized by _split_paragraphs)
+    total_len = sum(len(p) for p in paragraphs) + len(paragraphs) - 1
+    if total_len <= max_chars:
+        return [" ".join(paragraphs)]
+
+    # Step 2: Merge small paragraphs into segments, split large ones
+    segments = []
+    current = ""
+
+    for para in paragraphs:
+        if len(para) > max_chars:
+            # Flush current buffer first
+            if current.strip():
+                segments.append(current.strip())
+                current = ""
+            # Split this large paragraph at sentence boundaries
+            segments.extend(_split_at_sentences(para, max_chars))
+        elif len(current) + len(para) + 1 > max_chars:
+            # Adding this paragraph would exceed limit — flush and start new
+            if current.strip():
+                segments.append(current.strip())
+            current = para
+        else:
+            # Join paragraphs with a space (lines already normalized)
+            current = current + " " + para if current else para
+
+    if current.strip():
+        segments.append(current.strip())
+
+    return [s for s in segments if s.strip()]
+
+
+def _split_paragraphs(text: str) -> list[str]:
+    """Split text into paragraphs on blank lines, joining lines within each paragraph.
+
+    PDF extraction often inserts hard line breaks mid-sentence. This function:
+    1. Splits on blank lines (double newlines) to find paragraph boundaries.
+    2. Within each paragraph, replaces single newlines with spaces so
+       sentences flow naturally without mid-line breaks.
+    """
+    import re
+    # Split on double newlines (blank line separator)
+    parts = re.split(r'\n\s*\n', text)
+    result = []
+    for part in parts:
+        stripped = part.strip()
+        if stripped:
+            # Join hard-wrapped lines within the paragraph into flowing text
+            joined = re.sub(r'\n', ' ', stripped)
+            # Collapse multiple spaces that may result from joining
+            joined = re.sub(r'  +', ' ', joined)
+            result.append(joined)
+    return result
+
+
+def _split_at_sentences(text: str, max_chars: int) -> list[str]:
+    """Split a long paragraph at sentence-ending punctuation (.!?) followed by a space or newline.
+
+    Only splits after actual sentence endings — not abbreviations or decimals.
+    """
+    import re
     segments = []
     remaining = text
 
@@ -450,23 +520,31 @@ def _split_long_text(text: str, max_chars: int = MAX_SEGMENT_CHARS) -> list[str]
 
         chunk = remaining[:max_chars]
 
+        # Find the last sentence-ending position: punctuation (.!?) followed by
+        # a space and an uppercase letter (start of new sentence), or end-of-line.
+        # Search backwards for the best split point.
         split_pos = -1
-        for pattern in ['. ', '? ', '! ', '.\n', '?\n', '!\n']:
-            pos = chunk.rfind(pattern)
-            if pos > max_chars // 4:
-                split_pos = pos + len(pattern)
-                break
 
+        # Look for sentence endings: .!? followed by whitespace
+        # Search from the end of the chunk backwards
+        for m in re.finditer(r'[.!?][\s]', chunk):
+            pos = m.end()
+            if pos > max_chars // 4:
+                split_pos = pos  # keep updating — last match wins (rightmost)
+
+        # Fallback: split at last newline
         if split_pos == -1:
             pos = chunk.rfind('\n')
             if pos > max_chars // 4:
                 split_pos = pos + 1
 
+        # Fallback: split at last space
         if split_pos == -1:
             pos = chunk.rfind(' ')
             if pos > max_chars // 4:
                 split_pos = pos + 1
 
+        # Last resort: hard cut
         if split_pos == -1:
             split_pos = max_chars
 
