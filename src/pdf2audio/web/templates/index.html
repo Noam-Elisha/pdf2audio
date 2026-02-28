@@ -166,6 +166,19 @@
         .btn-primary:hover { background: var(--accent-hover); }
         .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
+        .btn-download {
+            background: var(--green);
+            color: white;
+            width: 100%;
+            justify-content: center;
+            padding: 0.85rem;
+            margin-top: 1rem;
+            font-size: 1rem;
+            text-decoration: none;
+        }
+
+        .btn-download:hover { opacity: 0.9; }
+
         /* Chapter table */
         .chapter-table {
             width: 100%;
@@ -187,11 +200,16 @@
         .chapter-table td {
             padding: 0.5rem;
             border-bottom: 1px solid var(--border);
+            vertical-align: middle;
         }
 
         .chapter-table tr:last-child td { border-bottom: none; }
 
         /* Status indicators */
+        .status-cell {
+            min-width: 120px;
+        }
+
         .status-dot {
             display: inline-block;
             width: 8px;
@@ -203,6 +221,7 @@
         .status-dot.pending { background: var(--text-dim); }
         .status-dot.generating { background: var(--orange); animation: pulse 1s infinite; }
         .status-dot.done { background: var(--green); }
+        .status-dot.skipped { background: var(--green); }
         .status-dot.error { background: var(--red); }
 
         @keyframes pulse {
@@ -210,10 +229,28 @@
             50% { opacity: 0.4; }
         }
 
+        /* Chapter progress bar (within status cell) */
+        .chapter-progress {
+            height: 3px;
+            background: var(--surface2);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+
+        .chapter-progress .fill {
+            height: 100%;
+            background: var(--orange);
+            border-radius: 2px;
+            transition: width 0.3s ease;
+        }
+
         /* Audio player */
         .audio-cell audio {
-            height: 28px;
+            height: 44px;
             width: 100%;
+            min-width: 200px;
+            border-radius: 8px;
         }
 
         /* Progress bar */
@@ -321,10 +358,19 @@
                 </div>
                 <div>
                     <label for="format-select">Format</label>
-                    <select id="format-select">
-                        <option value="wav">WAV</option>
-                        <option value="flac">FLAC</option>
-                        <option value="ogg">OGG</option>
+                    <select id="format-select" onchange="onFormatChange()">
+                        <option value="wav">WAV (lossless, large)</option>
+                        <option value="mp3">MP3 (compressed)</option>
+                        <option value="flac">FLAC (lossless, compressed)</option>
+                        <option value="ogg">OGG (compressed)</option>
+                    </select>
+                </div>
+                <div id="quality-group" class="hidden">
+                    <label for="quality-select">MP3 Quality</label>
+                    <select id="quality-select">
+                        <option value="high">High (192 kbps)</option>
+                        <option value="medium" selected>Medium (128 kbps)</option>
+                        <option value="low">Low (64 kbps)</option>
                     </select>
                 </div>
             </div>
@@ -366,11 +412,31 @@
                 <div class="fill" id="progress-fill" style="width: 0%"></div>
             </div>
         </div>
+
+        <!-- Download All -->
+        <div class="card hidden" id="download-card">
+            <h2>Download</h2>
+            <p style="color: var(--text-dim); margin-bottom: 0.5rem;">All chapters have been generated. Download the complete audiobook as a single file.</p>
+            <a class="btn btn-download" id="download-all-btn" href="#">
+                Download Complete Audiobook
+            </a>
+        </div>
     </div>
 
     <script>
         let currentJob = null;
         let pollInterval = null;
+
+        // Format change: show/hide quality selector
+        function onFormatChange() {
+            const fmt = document.getElementById('format-select').value;
+            const qg = document.getElementById('quality-group');
+            if (fmt === 'mp3') {
+                qg.classList.remove('hidden');
+            } else {
+                qg.classList.add('hidden');
+            }
+        }
 
         // Setup handling
         async function startSetup() {
@@ -431,23 +497,25 @@
         const uploadZone = document.getElementById('upload-zone');
         const fileInput = document.getElementById('file-input');
 
-        uploadZone.addEventListener('click', () => fileInput.click());
-        uploadZone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            uploadZone.classList.add('dragover');
-        });
-        uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
-        uploadZone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            uploadZone.classList.remove('dragover');
-            if (e.dataTransfer.files.length) {
-                fileInput.files = e.dataTransfer.files;
-                handleUpload(e.dataTransfer.files[0]);
-            }
-        });
-        fileInput.addEventListener('change', () => {
-            if (fileInput.files.length) handleUpload(fileInput.files[0]);
-        });
+        if (uploadZone) {
+            uploadZone.addEventListener('click', () => fileInput.click());
+            uploadZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                uploadZone.classList.add('dragover');
+            });
+            uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+            uploadZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                uploadZone.classList.remove('dragover');
+                if (e.dataTransfer.files.length) {
+                    fileInput.files = e.dataTransfer.files;
+                    handleUpload(e.dataTransfer.files[0]);
+                }
+            });
+            fileInput.addEventListener('change', () => {
+                if (fileInput.files.length) handleUpload(fileInput.files[0]);
+            });
+        }
 
         async function handleUpload(file) {
             const statusEl = document.getElementById('upload-status');
@@ -489,7 +557,9 @@
                     <td>${escapeHtml(ch.title)}</td>
                     <td>${ch.page_start}-${ch.page_end}</td>
                     <td>~${ch.est_minutes} min</td>
-                    <td><span class="status-dot pending"></span>Pending</td>
+                    <td class="status-cell">
+                        <div><span class="status-dot pending"></span>Pending</div>
+                    </td>
                     <td class="audio-cell">-</td>
                 `;
                 tbody.appendChild(tr);
@@ -512,6 +582,7 @@
                 speed: parseFloat(document.getElementById('speed-input').value),
                 lang_code: document.getElementById('lang-select').value,
                 format: document.getElementById('format-select').value,
+                quality: document.getElementById('quality-select').value,
             };
 
             try {
@@ -531,7 +602,7 @@
                 updateChapterStatus(0, 'generating', 'Generating...');
 
                 // Start polling
-                pollInterval = setInterval(() => pollStatus(data.job_id), 2000);
+                pollInterval = setInterval(() => pollStatus(data.job_id), 1500);
             } catch (err) {
                 document.getElementById('progress-text').textContent = `Failed: ${err.message}`;
             }
@@ -557,11 +628,33 @@
                     data.results.forEach(r => {
                         const filename = r.output_path.split(/[/\\]/).pop();
                         const audioUrl = `/api/audio/${jobId}/${filename}`;
-                        updateChapterStatus(r.chapter_index, 'done',
-                            `${r.duration_seconds}s`,
-                            audioUrl
-                        );
+                        const statusText = r.skipped
+                            ? `${r.duration_seconds}s (cached)`
+                            : `${r.duration_seconds}s`;
+                        const dotClass = r.skipped ? 'skipped' : 'done';
+                        updateChapterStatus(r.chapter_index, dotClass, statusText, audioUrl);
                     });
+                }
+
+                // Update per-chapter progress for the currently generating chapter
+                if (data.chapter_progress && data.chapter_progress.chapter_index >= 0) {
+                    const cp = data.chapter_progress;
+                    const chIdx = cp.chapter_index;
+                    const chPct = cp.chars_total > 0
+                        ? Math.round((cp.chars_processed / cp.chars_total) * 100) : 0;
+
+                    // Mark current chapter as generating with progress bar
+                    const row = document.getElementById(`chapter-row-${chIdx}`);
+                    if (row) {
+                        const statusCell = row.cells[4];
+                        const currentDot = statusCell.querySelector('.status-dot');
+                        if (currentDot && !currentDot.classList.contains('done') && !currentDot.classList.contains('skipped')) {
+                            statusCell.innerHTML = `
+                                <div><span class="status-dot generating"></span>Generating... ${chPct}%</div>
+                                <div class="chapter-progress"><div class="fill" style="width: ${chPct}%"></div></div>
+                            `;
+                        }
+                    }
                 }
 
                 // Mark next chapter as generating
@@ -574,6 +667,11 @@
                     clearInterval(pollInterval);
                     document.getElementById('progress-text').textContent = 'All chapters complete!';
                     document.getElementById('generate-btn').textContent = 'Done!';
+
+                    // Show download button
+                    const dlCard = document.getElementById('download-card');
+                    dlCard.classList.remove('hidden');
+                    document.getElementById('download-all-btn').href = `/api/download-all/${jobId}`;
                 } else if (data.status === 'error') {
                     clearInterval(pollInterval);
                     document.getElementById('progress-text').textContent = `Error: ${data.error}`;
@@ -588,8 +686,7 @@
             if (!row) return;
 
             const cells = row.cells;
-            const dotClass = status === 'done' ? 'done' : status === 'generating' ? 'generating' : 'pending';
-            cells[4].innerHTML = `<span class="status-dot ${dotClass}"></span>${text}`;
+            cells[4].innerHTML = `<div><span class="status-dot ${status}"></span>${text}</div>`;
 
             if (audioUrl) {
                 cells[5].innerHTML = `<audio controls preload="none" src="${audioUrl}"></audio>`;

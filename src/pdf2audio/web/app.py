@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import threading
@@ -10,11 +9,15 @@ import time
 import uuid
 from pathlib import Path
 
-from flask import Flask, render_template, request, jsonify, send_from_directory
+import numpy as np
+import soundfile as sf
+from flask import Flask, render_template, request, jsonify, send_from_directory, send_file
 
 from ..pdf_extract import extract_chapters, get_pdf_info
-from ..tts_engine import TTSEngine, DEFAULT_VOICE, detect_device
+from ..tts_engine import TTSEngine, DEFAULT_VOICE, detect_device, SAMPLE_RATE
+from ..audio_formats import save_audio, MP3_QUALITY_PRESETS
 from ..model_manager import is_setup_complete, list_local_voices, download_models
+from ..manifest import JobManifest
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +105,7 @@ def start_generation():
     speed = float(data.get("speed", 1.0))
     lang_code = data.get("lang_code", "a")
     output_format = data.get("format", "wav")
+    quality = data.get("quality", "medium")
 
     if not upload_path or not os.path.exists(upload_path):
         return jsonify({"error": "Upload not found"}), 404
@@ -118,12 +122,20 @@ def start_generation():
         "results": [],
         "error": None,
         "started_at": time.time(),
+        "format": output_format,
+        "quality": quality,
+        "chapter_progress": {
+            "chapter_index": -1,
+            "chapter_title": "",
+            "chars_processed": 0,
+            "chars_total": 0,
+        },
     }
 
     # Run generation in a background thread
     thread = threading.Thread(
         target=_run_generation,
-        args=(job_id, chapters, str(output_dir), voice, speed, lang_code, output_format),
+        args=(job_id, chapters, str(output_dir), upload_path, voice, speed, lang_code, output_format, quality),
         daemon=True,
     )
     thread.start()
@@ -135,10 +147,12 @@ def _run_generation(
     job_id: str,
     chapters: list,
     output_dir: str,
+    upload_path: str,
     voice: str,
     speed: float,
     lang_code: str,
     output_format: str,
+    quality: str,
 ):
     """Background worker for generating audio."""
     try:
@@ -147,9 +161,38 @@ def _run_generation(
             speed=speed,
             lang_code=lang_code,
             output_format=output_format,
+            quality=quality,
         )
 
-        for result in engine.generate_all(chapters, output_dir):
+        # Set up manifest for resume support
+        manifest = JobManifest(
+            output_dir,
+            pdf_path=upload_path,
+            voice=voice,
+            speed=speed,
+            lang_code=lang_code,
+            format=output_format,
+            quality=quality,
+        )
+
+        # Check if manifest matches current settings, reset if not
+        if manifest.manifest_path.exists() and not manifest.matches_settings(
+            upload_path, voice=voice, speed=speed, lang_code=lang_code, format=output_format, quality=quality
+        ):
+            logger.info("Settings changed, starting fresh")
+            manifest = JobManifest(output_dir, pdf_path=upload_path,
+                                   voice=voice, speed=speed, lang_code=lang_code,
+                                   format=output_format, quality=quality)
+
+        def on_progress(progress):
+            JOBS[job_id]["chapter_progress"] = {
+                "chapter_index": progress.chapter_index,
+                "chapter_title": progress.chapter_title,
+                "chars_processed": progress.chars_processed,
+                "chars_total": progress.chars_total,
+            }
+
+        for result in engine.generate_all(chapters, output_dir, manifest=manifest, progress_callback=on_progress):
             JOBS[job_id]["completed_chapters"] += 1
             JOBS[job_id]["results"].append({
                 "chapter_index": result.chapter.index,
@@ -157,6 +200,7 @@ def _run_generation(
                 "output_path": result.output_path,
                 "duration_seconds": round(result.duration_seconds, 1),
                 "generation_time_seconds": round(result.generation_time_seconds, 1),
+                "skipped": result.skipped,
             })
 
         JOBS[job_id]["status"] = "completed"
@@ -183,6 +227,71 @@ def serve_audio(job_id, filename):
     if not audio_dir.exists():
         return jsonify({"error": "Not found"}), 404
     return send_from_directory(str(audio_dir.resolve()), filename)
+
+
+@app.route("/api/download-all/<job_id>")
+def download_all(job_id):
+    """Concatenate all chapter audio files and serve as a single download."""
+    job = JOBS.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    if job["status"] != "completed":
+        return jsonify({"error": "Job not yet completed"}), 400
+
+    results = sorted(job["results"], key=lambda r: r["chapter_index"])
+    output_format = job.get("format", "wav")
+    quality = job.get("quality", "medium")
+
+    # Concatenate all audio with 1s silence between chapters
+    silence = np.zeros(SAMPLE_RATE, dtype=np.float32)  # 1 second
+    all_audio = []
+
+    for r in results:
+        path = r["output_path"]
+        if not Path(path).exists():
+            return jsonify({"error": f"Audio file missing: {path}"}), 500
+
+        if output_format == "mp3":
+            # For MP3, we need to decode to raw audio first
+            # Read back using soundfile if possible, otherwise skip
+            try:
+                audio_data, sr = sf.read(path)
+                all_audio.append(audio_data.astype(np.float32))
+            except Exception:
+                # MP3 files can't be read by soundfile, decode differently
+                try:
+                    import subprocess
+                    # Use ffmpeg if available, otherwise just concatenate bytes
+                    logger.warning(f"Cannot read MP3 for concatenation: {path}")
+                    continue
+                except Exception:
+                    continue
+        else:
+            audio_data, sr = sf.read(path)
+            all_audio.append(audio_data.astype(np.float32))
+
+        all_audio.append(silence)
+
+    if not all_audio:
+        return jsonify({"error": "No audio data to concatenate"}), 500
+
+    # Remove trailing silence
+    if len(all_audio) > 1:
+        all_audio = all_audio[:-1]
+
+    combined = np.concatenate(all_audio)
+
+    # Save to a temp file and serve
+    combined_filename = f"audiobook_complete.{output_format}"
+    combined_path = OUTPUT_DIR / job_id / combined_filename
+
+    save_audio(combined, str(combined_path), SAMPLE_RATE, output_format, quality)
+
+    return send_file(
+        str(combined_path.resolve()),
+        as_attachment=True,
+        download_name=combined_filename,
+    )
 
 
 @app.route("/api/setup", methods=["POST"])

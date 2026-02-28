@@ -18,6 +18,7 @@ dependencies = [
     "click>=8.0",
     "numpy",
     "torch",
+    "lameenc>=1.7",
 ]
 
 [project.optional-dependencies]

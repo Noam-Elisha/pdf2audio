@@ -15,6 +15,7 @@ from rich.panel import Panel
 from .pdf_extract import extract_chapters, get_pdf_info
 from .tts_engine import TTSEngine, DEFAULT_VOICE, detect_device
 from .model_manager import is_setup_complete, get_model_dir, list_local_voices
+from .manifest import JobManifest
 
 console = Console()
 
@@ -86,13 +87,17 @@ def setup(model_dir):
 @click.option("-s", "--speed", default=1.0, type=float, help="Speech speed multiplier (default: 1.0)")
 @click.option("-l", "--lang", "lang_code", default="a", help="Language code: a=US English, b=UK English (default: a)")
 @click.option("-d", "--device", default=None, help="Compute device: cuda, cpu, mps (default: auto-detect)")
-@click.option("-f", "--format", "output_format", default="wav", type=click.Choice(["wav", "flac", "ogg"]), help="Audio format")
+@click.option("-f", "--format", "output_format", default="wav", type=click.Choice(["wav", "mp3", "flac", "ogg"]), help="Audio format")
+@click.option("-q", "--quality", default="medium", type=click.Choice(["low", "medium", "high"]), help="MP3 quality (default: medium)")
 @click.option("--verbose", is_flag=True, help="Enable verbose logging")
-def convert(pdf_path, output_dir, voice, speed, lang_code, device, output_format, verbose):
+def convert(pdf_path, output_dir, voice, speed, lang_code, device, output_format, quality, verbose):
     """Convert a PDF to audiobook files, one per chapter.
 
     Audio files are output as they are generated, so you can start
     listening to Chapter 1 while later chapters are still processing.
+
+    Supports resume: if generation is interrupted, re-run the same
+    command and already-completed chapters will be skipped.
     """
     if verbose:
         logging.basicConfig(level=logging.DEBUG, format="%(name)s %(message)s")
@@ -118,6 +123,8 @@ def convert(pdf_path, output_dir, voice, speed, lang_code, device, output_format
     console.print(f"  Voice:  [cyan]{voice}[/cyan]")
     console.print(f"  Speed:  [cyan]{speed}x[/cyan]")
     console.print(f"  Format: [cyan]{output_format}[/cyan]")
+    if output_format == "mp3":
+        console.print(f"  Quality: [cyan]{quality}[/cyan]")
     console.print()
 
     # Extract chapters
@@ -145,6 +152,28 @@ def convert(pdf_path, output_dir, voice, speed, lang_code, device, output_format
     console.print(table)
     console.print()
 
+    # Set up manifest for resume support
+    manifest = JobManifest(
+        output_dir,
+        pdf_path=pdf_path,
+        voice=voice,
+        speed=speed,
+        lang_code=lang_code,
+        format=output_format,
+        quality=quality,
+    )
+
+    # Check if manifest matches; if settings changed, start fresh
+    if manifest.manifest_path.exists() and not manifest.matches_settings(
+        pdf_path, voice=voice, speed=speed, lang_code=lang_code, format=output_format, quality=quality
+    ):
+        console.print("[yellow]Settings changed from previous run. Starting fresh.[/yellow]")
+        manifest = JobManifest(
+            output_dir, pdf_path=pdf_path,
+            voice=voice, speed=speed, lang_code=lang_code,
+            format=output_format, quality=quality,
+        )
+
     # Generate audio
     engine = TTSEngine(
         voice=voice,
@@ -152,6 +181,7 @@ def convert(pdf_path, output_dir, voice, speed, lang_code, device, output_format
         lang_code=lang_code,
         device=device,
         output_format=output_format,
+        quality=quality,
     )
 
     console.print(f"Output directory: [cyan]{output_dir}[/cyan]")
@@ -165,17 +195,32 @@ def convert(pdf_path, output_dir, voice, speed, lang_code, device, output_format
         TimeElapsedColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("Generating audio...", total=len(chapters))
+        chapter_task = progress.add_task("Generating audio...", total=len(chapters))
 
-        for result in engine.generate_all(chapters, output_dir):
-            progress.update(task, advance=1)
-            console.print(
-                f"  [green]\u2713[/green] Chapter {result.chapter.index + 1}: "
-                f"[bold]{result.chapter.title}[/bold] "
-                f"({result.duration_seconds:.0f}s audio, "
-                f"took {result.generation_time_seconds:.0f}s) "
-                f"-> [dim]{result.output_path}[/dim]"
+        def on_progress(p):
+            pct = p.chars_total > 0 and round(p.chars_processed / p.chars_total * 100) or 0
+            progress.update(
+                chapter_task,
+                description=f"Ch {p.chapter_index + 1}: {p.chapter_title[:30]}... {pct}%",
             )
+
+        for result in engine.generate_all(chapters, output_dir, manifest=manifest, progress_callback=on_progress):
+            progress.update(chapter_task, advance=1, description="Generating audio...")
+            if result.skipped:
+                console.print(
+                    f"  [blue]\u21B7[/blue] Chapter {result.chapter.index + 1}: "
+                    f"[bold]{result.chapter.title}[/bold] "
+                    f"({result.duration_seconds:.0f}s audio) "
+                    f"[dim][skipped - cached][/dim]"
+                )
+            else:
+                console.print(
+                    f"  [green]\u2713[/green] Chapter {result.chapter.index + 1}: "
+                    f"[bold]{result.chapter.title}[/bold] "
+                    f"({result.duration_seconds:.0f}s audio, "
+                    f"took {result.generation_time_seconds:.0f}s) "
+                    f"-> [dim]{result.output_path}[/dim]"
+                )
 
     console.print()
     console.print(Panel("[bold green]Done![/bold green] All chapters generated.", style="green"))
@@ -271,7 +316,7 @@ def devices():
 
     if torch.cuda.is_available():
         console.print(f"  [green]\u2713[/green] CUDA: {torch.cuda.get_device_name(0)}")
-        console.print(f"    VRAM: {torch.cuda.get_device_properties(0).total_mem / 1e9:.1f} GB")
+        console.print(f"    VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     else:
         console.print("  [red]\u2717[/red] CUDA: Not available")
 
