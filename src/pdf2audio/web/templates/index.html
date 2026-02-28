@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>pdf2audio - PDF to Audiobook</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --surface: #1a1d27;
+            --surface2: #242733;
+            --border: #2e3140;
+            --text: #e4e6f0;
+            --text-dim: #8b8fa3;
+            --accent: #6c5ce7;
+            --accent-hover: #7c6ef7;
+            --green: #00b894;
+            --red: #e74c3c;
+            --orange: #f0932b;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 860px;
+            margin: 0 auto;
+            padding: 2rem 1.5rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2.5rem;
+        }
+
+        header h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 0.25rem;
+        }
+
+        header p {
+            color: var(--text-dim);
+            font-size: 0.95rem;
+        }
+
+        .device-badge {
+            display: inline-block;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            padding: 0.25rem 0.75rem;
+            border-radius: 1rem;
+            font-size: 0.8rem;
+            margin-top: 0.5rem;
+            color: var(--green);
+        }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .card h2 {
+            font-size: 1.1rem;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .step-num {
+            background: var(--accent);
+            color: white;
+            width: 1.5rem;
+            height: 1.5rem;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        /* Upload area */
+        .upload-zone {
+            border: 2px dashed var(--border);
+            border-radius: 8px;
+            padding: 2.5rem;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s, background 0.2s;
+        }
+
+        .upload-zone:hover, .upload-zone.dragover {
+            border-color: var(--accent);
+            background: rgba(108, 92, 231, 0.05);
+        }
+
+        .upload-zone input { display: none; }
+
+        .upload-zone .icon { font-size: 2rem; margin-bottom: 0.5rem; }
+
+        .upload-zone p { color: var(--text-dim); }
+
+        /* Settings */
+        .settings-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
+        label {
+            display: block;
+            font-size: 0.85rem;
+            color: var(--text-dim);
+            margin-bottom: 0.25rem;
+        }
+
+        select, input[type="number"] {
+            width: 100%;
+            padding: 0.5rem 0.75rem;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 0.9rem;
+        }
+
+        select:focus, input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.6rem 1.5rem;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+            width: 100%;
+            justify-content: center;
+            padding: 0.75rem;
+            margin-top: 1rem;
+        }
+
+        .btn-primary:hover { background: var(--accent-hover); }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* Chapter table */
+        .chapter-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+
+        .chapter-table th {
+            text-align: left;
+            padding: 0.5rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-dim);
+            font-weight: 500;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .chapter-table td {
+            padding: 0.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .chapter-table tr:last-child td { border-bottom: none; }
+
+        /* Status indicators */
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 0.5rem;
+        }
+
+        .status-dot.pending { background: var(--text-dim); }
+        .status-dot.generating { background: var(--orange); animation: pulse 1s infinite; }
+        .status-dot.done { background: var(--green); }
+        .status-dot.error { background: var(--red); }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* Audio player */
+        .audio-cell audio {
+            height: 28px;
+            width: 100%;
+        }
+
+        /* Progress bar */
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: var(--surface2);
+            border-radius: 3px;
+            overflow: hidden;
+            margin: 1rem 0;
+        }
+
+        .progress-bar .fill {
+            height: 100%;
+            background: var(--accent);
+            border-radius: 3px;
+            transition: width 0.5s ease;
+        }
+
+        .status-text {
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .hidden { display: none; }
+
+        /* Info alert */
+        .info {
+            background: rgba(108, 92, 231, 0.1);
+            border-left: 3px solid var(--accent);
+            padding: 0.75rem 1rem;
+            border-radius: 0 6px 6px 0;
+            font-size: 0.85rem;
+            color: var(--text-dim);
+            margin-top: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>pdf2audio</h1>
+            <p>Convert PDFs to audiobooks with chapter-by-chapter output</p>
+            <div class="device-badge">{{ device }} detected</div>
+        </header>
+
+        <!-- Step 1: Upload -->
+        <div class="card" id="upload-card">
+            <h2><span class="step-num">1</span> Upload PDF</h2>
+            <div class="upload-zone" id="upload-zone">
+                <div class="icon">&#x1F4C4;</div>
+                <p><strong>Click to select</strong> or drag & drop a PDF file</p>
+                <input type="file" id="file-input" accept=".pdf">
+            </div>
+            <div id="upload-status" class="hidden">
+                <p class="status-text" id="upload-text"></p>
+            </div>
+        </div>
+
+        <!-- Step 2: Configure -->
+        <div class="card hidden" id="config-card">
+            <h2><span class="step-num">2</span> Configure</h2>
+            <div class="settings-grid">
+                <div>
+                    <label for="voice-select">Voice</label>
+                    <select id="voice-select">
+                        <option value="af_heart">af_heart (American F, A)</option>
+                        <option value="af_bella">af_bella (American F, A-)</option>
+                        <option value="af_sarah">af_sarah (American F, B)</option>
+                        <option value="am_adam">am_adam (American M, B)</option>
+                        <option value="am_michael">am_michael (American M, B)</option>
+                        <option value="bf_emma">bf_emma (British F, B-)</option>
+                        <option value="bm_george">bm_george (British M, C+)</option>
+                        <option value="ff_siwis">ff_siwis (French F, B-)</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="speed-input">Speed</label>
+                    <input type="number" id="speed-input" value="1.0" min="0.5" max="2.0" step="0.1">
+                </div>
+                <div>
+                    <label for="lang-select">Language</label>
+                    <select id="lang-select">
+                        <option value="a">American English</option>
+                        <option value="b">British English</option>
+                        <option value="f">French</option>
+                        <option value="j">Japanese</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="format-select">Format</label>
+                    <select id="format-select">
+                        <option value="wav">WAV</option>
+                        <option value="flac">FLAC</option>
+                        <option value="ogg">OGG</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 3: Chapters -->
+        <div class="card hidden" id="chapters-card">
+            <h2><span class="step-num">3</span> Chapters</h2>
+            <div id="chapter-info"></div>
+            <table class="chapter-table" id="chapter-table">
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Title</th>
+                        <th>Pages</th>
+                        <th>Est.</th>
+                        <th>Status</th>
+                        <th>Audio</th>
+                    </tr>
+                </thead>
+                <tbody id="chapter-tbody"></tbody>
+            </table>
+
+            <button class="btn btn-primary" id="generate-btn" onclick="startGeneration()">
+                Generate Audiobook
+            </button>
+
+            <div class="info">
+                Audio files are generated one chapter at a time. You can start listening to
+                completed chapters while the rest are still processing.
+            </div>
+        </div>
+
+        <!-- Progress -->
+        <div class="card hidden" id="progress-card">
+            <h2>Progress</h2>
+            <p class="status-text" id="progress-text">Initializing...</p>
+            <div class="progress-bar">
+                <div class="fill" id="progress-fill" style="width: 0%"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentJob = null;
+        let pollInterval = null;
+
+        // Upload handling
+        const uploadZone = document.getElementById('upload-zone');
+        const fileInput = document.getElementById('file-input');
+
+        uploadZone.addEventListener('click', () => fileInput.click());
+        uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadZone.classList.add('dragover');
+        });
+        uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) {
+                fileInput.files = e.dataTransfer.files;
+                handleUpload(e.dataTransfer.files[0]);
+            }
+        });
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length) handleUpload(fileInput.files[0]);
+        });
+
+        async function handleUpload(file) {
+            const statusEl = document.getElementById('upload-status');
+            const textEl = document.getElementById('upload-text');
+            statusEl.classList.remove('hidden');
+            textEl.textContent = `Uploading ${file.name}...`;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const resp = await fetch('/api/upload', { method: 'POST', body: formData });
+                const data = await resp.json();
+
+                if (!resp.ok) {
+                    textEl.textContent = `Error: ${data.error}`;
+                    return;
+                }
+
+                currentJob = data;
+                textEl.textContent = `${file.name} - ${data.pages} pages, ${data.chapters.length} chapters`;
+                renderChapters(data.chapters);
+
+                document.getElementById('config-card').classList.remove('hidden');
+                document.getElementById('chapters-card').classList.remove('hidden');
+            } catch (err) {
+                textEl.textContent = `Upload failed: ${err.message}`;
+            }
+        }
+
+        function renderChapters(chapters) {
+            const tbody = document.getElementById('chapter-tbody');
+            tbody.innerHTML = '';
+            chapters.forEach(ch => {
+                const tr = document.createElement('tr');
+                tr.id = `chapter-row-${ch.index}`;
+                tr.innerHTML = `
+                    <td>${ch.index + 1}</td>
+                    <td>${escapeHtml(ch.title)}</td>
+                    <td>${ch.page_start}-${ch.page_end}</td>
+                    <td>~${ch.est_minutes} min</td>
+                    <td><span class="status-dot pending"></span>Pending</td>
+                    <td class="audio-cell">-</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        async function startGeneration() {
+            if (!currentJob) return;
+
+            const btn = document.getElementById('generate-btn');
+            btn.disabled = true;
+            btn.textContent = 'Generating...';
+
+            document.getElementById('progress-card').classList.remove('hidden');
+
+            const body = {
+                job_id: currentJob.job_id,
+                upload_path: currentJob.upload_path,
+                voice: document.getElementById('voice-select').value,
+                speed: parseFloat(document.getElementById('speed-input').value),
+                lang_code: document.getElementById('lang-select').value,
+                format: document.getElementById('format-select').value,
+            };
+
+            try {
+                const resp = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const data = await resp.json();
+
+                if (!resp.ok) {
+                    document.getElementById('progress-text').textContent = `Error: ${data.error}`;
+                    return;
+                }
+
+                // Mark first chapter as generating
+                updateChapterStatus(0, 'generating', 'Generating...');
+
+                // Start polling
+                pollInterval = setInterval(() => pollStatus(data.job_id), 2000);
+            } catch (err) {
+                document.getElementById('progress-text').textContent = `Failed: ${err.message}`;
+            }
+        }
+
+        let lastCompletedCount = 0;
+
+        async function pollStatus(jobId) {
+            try {
+                const resp = await fetch(`/api/status/${jobId}`);
+                const data = await resp.json();
+
+                const total = data.total_chapters;
+                const done = data.completed_chapters;
+                const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+
+                document.getElementById('progress-fill').style.width = `${pct}%`;
+                document.getElementById('progress-text').textContent =
+                    `${done}/${total} chapters complete (${pct}%)`;
+
+                // Update completed chapters
+                if (data.results) {
+                    data.results.forEach(r => {
+                        const filename = r.output_path.split(/[/\\]/).pop();
+                        const audioUrl = `/api/audio/${jobId}/${filename}`;
+                        updateChapterStatus(r.chapter_index, 'done',
+                            `${r.duration_seconds}s`,
+                            audioUrl
+                        );
+                    });
+                }
+
+                // Mark next chapter as generating
+                if (done < total && done > lastCompletedCount) {
+                    updateChapterStatus(done, 'generating', 'Generating...');
+                }
+                lastCompletedCount = done;
+
+                if (data.status === 'completed') {
+                    clearInterval(pollInterval);
+                    document.getElementById('progress-text').textContent = 'All chapters complete!';
+                    document.getElementById('generate-btn').textContent = 'Done!';
+                } else if (data.status === 'error') {
+                    clearInterval(pollInterval);
+                    document.getElementById('progress-text').textContent = `Error: ${data.error}`;
+                }
+            } catch (err) {
+                // Ignore transient polling errors
+            }
+        }
+
+        function updateChapterStatus(index, status, text, audioUrl) {
+            const row = document.getElementById(`chapter-row-${index}`);
+            if (!row) return;
+
+            const cells = row.cells;
+            const dotClass = status === 'done' ? 'done' : status === 'generating' ? 'generating' : 'pending';
+            cells[4].innerHTML = `<span class="status-dot ${dotClass}"></span>${text}`;
+
+            if (audioUrl) {
+                cells[5].innerHTML = `<audio controls preload="none" src="${audioUrl}"></audio>`;
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

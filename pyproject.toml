@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "pdf2audio"
+version = "0.1.0"
+description = "Convert PDFs to audiobooks with chapter-by-chapter output using Kokoro TTS"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "kokoro>=0.9.4",
+    "soundfile",
+    "pymupdf>=1.24.0",
+    "flask>=3.0",
+    "rich>=13.0",
+    "click>=8.0",
+    "numpy",
+    "torch",
+]
+
+[project.optional-dependencies]
+gpu = ["torch"]
+dev = ["ruff", "pytest"]
+
+[project.scripts]
+pdf2audio = "pdf2audio.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
